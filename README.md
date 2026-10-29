@@ -2,6 +2,10 @@
 
 This project implements an **Asynchronous FIFO (First-In First-Out) buffer in Verilog/SystemVerilog**. An asynchronous FIFO is used to safely transfer data between **two different clock domains**, where the write and read operations are driven by separate clocks.
 
+assign full  = (grey_wr == {~sync_rd[4:3], sync_rd[2:0]}); // overflow if written while full
+assign empty = (grey_rd == wr_sync2);                      // underflow if read while empty
+// 5-bit Gray pointers: 4 address bits + 1 wrap bit
+
 ## 📌 Overview
 An **Asynchronous FIFO** allows data to be written using one clock (`wr_clk`) and read using another clock (`rd_clk`). This makes it very useful in systems where different modules operate at **different clock frequencies**. The FIFO ensures that data is transferred reliably without corruption.
 
