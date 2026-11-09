@@ -3,7 +3,7 @@ module async_fifo (
     input clk_rd, clk_wr, wr_en, rd_en, rst,
     input [7:0] d_in,
     output empty, full,
-    output reg [7:0] d_out
+    output reg [7:0] d_out  
 );
 
     reg [7:0] mem [0:15];
