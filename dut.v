@@ -5,7 +5,7 @@ module async_fifo (
     output empty, full,
     output reg [7:0] d_out    
 );    
-
+   
     reg [7:0] mem [0:15];
     reg [4:0] rd_ptr, wr_ptr, gray_rd, gray_wr, syncff1_rd, syncff2_rd, syncff1_wr, syncff2_wr;
 
