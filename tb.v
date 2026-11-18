@@ -1,115 +1,109 @@
-`timescale 1ns / 1ps
+// Asynchronous FIFO, 16 x 8, Gray-coded pointers, registered flags
+module async_fifo (
+    input        clk_rd, clk_wr, wr_en, rd_en, rst,   // rst: active-low, asynchronous
+    input  [7:0] d_in,
+    output reg   empty, full,
+    output reg [7:0] d_out
+);
 
-module tb_async_fifo;
+    reg [7:0] mem [0:15];
+    reg [4:0] rd_ptr, wr_ptr, gray_rd, gray_wr;
+    reg [4:0] syncff1_rd, syncff2_rd, syncff1_wr, syncff2_wr;
 
-    // Testbench Signals
-    reg clk_rd;
-    reg clk_wr;
-    reg rst;
-    reg wr_en;
-    reg rd_en;
-    reg [7:0] d_in;
-    
-    wire empty;
-    wire full;
-    wire [7:0] d_out;
+    // ---------------------------------------------------------------
+    // 0. Reset synchronizers: async assert, synchronous deassert,
+    //    one per clock domain
+    // ---------------------------------------------------------------
+    reg rstff1_wr, rstff2_wr, rstff1_rd, rstff2_rd;
+    wire rst_wr = rstff2_wr;
+    wire rst_rd = rstff2_rd;
 
-    // Instantiate the Device Under Test (DUT)
-    async_fifo uut (
-        .clk_rd(clk_rd),
-        .clk_wr(clk_wr),
-        .wr_en(wr_en),
-        .rd_en(rd_en),
-        .rst(rst),
-        .d_in(d_in),
-        .empty(empty),
-        .full(full),
-        .d_out(d_out)
-    );
-
-    // 1. Clock Generation Block
-    // Write Clock: 10ns period (100 MHz)
-    initial begin
-        clk_wr = 0;
-        forever #(5) clk_wr = ~clk_wr;
+    always @(posedge clk_wr or negedge rst) begin
+        if (!rst) {rstff2_wr, rstff1_wr} <= 2'b00;
+        else      {rstff2_wr, rstff1_wr} <= {rstff1_wr, 1'b1};
     end
 
-    // Read Clock: 16ns period (~62.5 MHz) - Asynchronous to clk_wr
-    initial begin
-        clk_rd = 0;
-        forever #(8) clk_rd = ~clk_rd;
+    always @(posedge clk_rd or negedge rst) begin
+        if (!rst) {rstff2_rd, rstff1_rd} <= 2'b00;
+        else      {rstff2_rd, rstff1_rd} <= {rstff1_rd, 1'b1};
     end
 
-    // 2. Stimulus Block
-    initial begin
-        // Initialize Inputs
-        rst   = 0;
-        wr_en = 0;
-        rd_en = 0;
-        d_in  = 8'h00;
+    // ---------------------------------------------------------------
+    // Next-state values (computed once, reused everywhere)
+    // ---------------------------------------------------------------
+    wire       wr_fire      = wr_en && !full;
+    wire       rd_fire      = rd_en && !empty;
+    wire [4:0] wr_ptr_next  = wr_ptr + {4'd0, wr_fire};
+    wire [4:0] rd_ptr_next  = rd_ptr + {4'd0, rd_fire};
+    wire [4:0] gray_wr_next = (wr_ptr_next >> 1) ^ wr_ptr_next;
+    wire [4:0] gray_rd_next = (rd_ptr_next >> 1) ^ rd_ptr_next;
 
-        // Apply Reset
-        #25;
-        rst = 1;
-        #15;
-
-        // --- Test 1: Write data into the FIFO ---
-        @(posedge clk_wr);
-        $display("[%0t] Starting Write Operations...", $time);
-        repeat (5) begin
-            @(posedge clk_wr);
-            wr_en = 1;
-            d_in  = d_in + 8'h11; // Increment data value
+    // ---------------------------------------------------------------
+    // 1. Write Domain Logic
+    // ---------------------------------------------------------------
+    always @(posedge clk_wr or negedge rst_wr) begin
+        if (!rst_wr) begin
+            wr_ptr  <= 5'd0;
+            gray_wr <= 5'd0;
+            full    <= 1'b0;
+        end else begin
+            wr_ptr  <= wr_ptr_next;
+            gray_wr <= gray_wr_next;
+            // FULL: next write Gray pointer == synced read Gray pointer
+            //       with the top 2 bits inverted
+            full    <= (gray_wr_next == {~syncff2_rd[4:3], syncff2_rd[2:0]});
         end
-        
-        @(posedge clk_wr);
-        wr_en = 0; // Stop writing
-
-        #40;
-
-        // --- Test 2: Read data from the FIFO ---
-        @(posedge clk_rd);
-        $display("[%0t] Starting Read Operations...", $time);
-        repeat (5) begin
-            @(posedge clk_rd);
-            rd_en = 1;
-        end
-        
-        @(posedge clk_rd);
-        rd_en = 0; // Stop reading
-
-        #50;
-
-        // --- Test 3: Fill FIFO completely to check FULL flag ---
-        $display("[%0t] Filling FIFO to test FULL flag...", $time);
-        repeat (20) begin
-            @(posedge clk_wr);
-            wr_en = 1;
-            d_in  = d_in + 8'h01;
-        end
-        @(posedge clk_wr);
-        wr_en = 0;
-
-        #40;
-
-        // --- Test 4: Drain FIFO completely to check EMPTY flag ---
-        $display("[%0t] Emptying FIFO to test EMPTY flag...", $time);
-        repeat (20) begin
-            @(posedge clk_rd);
-            rd_en = 1;
-        end
-        @(posedge clk_rd);
-        rd_en = 0;
-
-        #100;
-        $display("[%0t] Simulation Finished.", $time);
-        $finish;
     end
 
-    // Optional: Monitor changes in console
-    initial begin
-        $monitor("Time=%0t | rst=%b | wr_en=%b rd_en=%b | d_in=0%h | d_out=0x%h | empty=%b full=%b", 
-                 $time, rst, wr_en, rd_en, d_in, d_out, empty, full);
+    // Memory write: no reset, so it can map to RAM / a macro
+    always @(posedge clk_wr) begin
+        if (rst_wr && wr_fire)
+            mem[wr_ptr[3:0]] <= d_in;
+    end
+
+    // ---------------------------------------------------------------
+    // 2. Synchronize Read Pointer into Write Domain (for FULL flag)
+    // ---------------------------------------------------------------
+    always @(posedge clk_wr or negedge rst_wr) begin
+        if (!rst_wr) begin
+            syncff1_rd <= 5'd0;
+            syncff2_rd <= 5'd0;
+        end else begin
+            syncff1_rd <= gray_rd;
+            syncff2_rd <= syncff1_rd;
+        end
+    end
+
+    // ---------------------------------------------------------------
+    // 3. Read Domain Logic
+    // ---------------------------------------------------------------
+    always @(posedge clk_rd or negedge rst_rd) begin
+        if (!rst_rd) begin
+            d_out   <= 8'd0;
+            rd_ptr  <= 5'd0;
+            gray_rd <= 5'd0;
+            empty   <= 1'b1;               // FIFO is empty after reset
+        end else begin
+            if (rd_fire)
+                d_out <= mem[rd_ptr[3:0]];
+            rd_ptr  <= rd_ptr_next;
+            gray_rd <= gray_rd_next;
+            // EMPTY: next read Gray pointer == synced write Gray pointer
+            empty   <= (gray_rd_next == syncff2_wr);
+        end
+    end
+
+    // ---------------------------------------------------------------
+    // 4. Synchronize Write Pointer into Read Domain (for EMPTY flag)
+    // ---------------------------------------------------------------
+    always @(posedge clk_rd or negedge rst_rd) begin
+        if (!rst_rd) begin
+            syncff1_wr <= 5'd0;
+            syncff2_wr <= 5'd0;
+        end else begin
+            syncff1_wr <= gray_wr;
+            syncff2_wr <= syncff1_wr;
+        end
     end
 
 endmodule
