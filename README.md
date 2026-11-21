@@ -1,77 +1,66 @@
-# Asynchronous FIFO
+# Asynchronous FIFO Architecture & Clock Domain Crossing (CDC)
 
-This project implements an **Asynchronous FIFO (First-In First-Out) buffer in Verilog/SystemVerilog**. An asynchronous FIFO is used to safely transfer data between **two different clock domains**, where the write and read operations are driven by separate clocks.
+## Overview
+An **Asynchronous FIFO (First-In, First-Out)** buffer is used to safely transfer data between two independent clock domains (`wr_clk` and `rd_clk`) that have no fixed phase or frequency relationship. Because signals cross between asynchronous clock domains, proper Clock Domain Crossing (CDC) techniques are mandatory to prevent metastability, data corruption, and false flag assertions (`full` / `empty`).
 
-**assign full  = (grey_wr == {~sync_rd[4:3], sync_rd[2:0]});** // overflow if written while full
-**assign empty = (grey_rd == wr_sync2);**                      // underflow if read while empty
-// 5-bit Gray pointers: 4 address bits + 1 wrap bit
+---
 
-## 📌 Overview
-An **Asynchronous FIFO** allows data to be written using one clock (`wr_clk`) and read using another clock (`rd_clk`). This makes it very useful in systems where different modules operate at **different clock frequencies**. The FIFO ensures that data is transferred reliably without corruption.
+## Key Components
 
-## ⚙️ Features
-- Separate **write clock and read clock**
-- FIFO-based data ordering (First-In First-Out)
-- Safe **Clock Domain Crossing (CDC)**
-- Full and Empty flag generation
-- Metastability mitigation using synchronizers
-- Gray code pointer synchronization
+1. **Dual-Port Memory (RAM):** Stores the data written in the write clock domain and read in the read clock domain.
+2. **Write Control Logic (`wr_clk` domain):** Manages the binary write pointer, converts it to Gray code, and generates the `full` flag.
+3. **Read Control Logic (`rd_clk` domain):** Manages the binary read pointer, converts it to Gray code, and generates the `empty` flag.
+4. **CDC Synchronizers:** Safely pass control signals and pointers between the `wr_clk` and `rd_clk` domains.
 
-## 🏗️ Architecture
-The Asynchronous FIFO consists of the following main components:
+---
 
-- **Memory Array** → Stores the incoming data.
-- **Write Pointer** → Points to the location where the next data will be written.
-- **Read Pointer** → Points to the location from which data will be read.
-- **Pointer Synchronizers** → Safely transfer pointers between clock domains.
-- **Control Logic** → Generates **Full** and **Empty** flags.
+## Clock Domain Crossing (CDC) Strategy
 
-## 🔄 Solving Clock Domain Crossing (CDC)
+To ensure reliable operation across asynchronous clock boundaries, the design separates single-bit control signals from multi-bit pointer buses, applying the appropriate synchronization technique to each.
 
-Since the **write and read sides operate on different clocks**, directly transferring signals between these domains can lead to **Clock Domain Crossing (CDC) issues**. If a signal is sampled while it is changing, the receiving flip-flop may enter an unstable state known as **metastability**.
+### 1. Single-Bit CDC: 2-Flip-Flop (2-FF) Synchronizer
+* **Application:** Used for single-bit control signals (e.g., asynchronous reset release, single-bit enable/status flags) or individual bits of a Gray-coded bus.
+* **Mechanism:** 
+  * The single-bit signal is passed through two back-to-back flip-flops clocked by the destination clock domain.
+  * The first flip-flop samples the asynchronous input and may enter a metastable state if setup/hold times are violated.
+  * The second flip-flop allows a full clock cycle for the metastable state to resolve to a valid logic level (`0` or `1`) before the signal is used by downstream logic.
+* **Why it works:** For a single bit, there is no risk of multi-bit skew; the signal simply arrives either on the current clock edge or one cycle later, both of which are functionally safe for control handshakes.
 
-To prevent this, the design uses **two-flip-flop synchronizers**.
+### 2. Multi-Bit CDC: Gray Code Pointers + 2-FF Synchronizers
+* **Application:** Used for multi-bit read (`rd_ptr`) and write (`wr_ptr`) address pointers crossing between clock domains to calculate `full` and `empty` conditions.
+* **Why Binary Pointers Fail:** 
+  * In standard binary counting, multiple bits can transition simultaneously (e.g., `0111` $\rightarrow$ `1000`).
+  * Due to routing delays and clock skew across bits, a 2-FF synchronizer on each bit might sample some bits before the transition and others after, resulting in a corrupted intermediate value (e.g., `1111` or `0000`) and causing false `full`/`empty` flags.
+* **Mechanism:**
+  * **Binary-to-Gray Conversion:** Before crossing the clock domain, the binary pointer is converted into a **Gray-coded pointer**, where consecutive values differ by **only one bit**.
+  * **Synchronization:** Because only one bit changes per increment, a multi-bit Gray pointer behaves like a single-bit transition at any given clock edge. Each bit of the Gray pointer is passed through a standard 2-FF synchronizer into the opposite clock domain.
+  * **Outcome:** If a setup/hold violation occurs during sampling, the destination domain will resolve to either the previous valid pointer value or the new valid pointer value—never a corrupted intermediate state.
 
-### 🛠️ Two-Flip-Flop Synchronizer
-When a pointer crosses from one clock domain to another, it passes through **two sequential flip-flops** in the receiving clock domain.
+---
 
+## Pointer Synchronization Flow
+
+```text
+  [ Write Clock Domain (wr_clk) ]                  [ Read Clock Domain (rd_clk) ]
+  -------------------------------                  ------------------------------
+  Binary Write Ptr (wr_bin)                        Binary Read Ptr (rd_bin)
+         |                                                |
+         v                                                v
+  Binary-to-Gray Converter                         Binary-to-Gray Converter
+         |                                                |
+         v                                                v
+  Gray Write Ptr (wr_gray)                         Gray Read Ptr (rd_gray)
+         |                                                |
+         +---------> [ 2-FF Sync (rd_clk) ] ------------->+---> Used for Empty Logic
+                                                          |
+  Used for Full Logic <---+--- [ 2-FF Sync (wr_clk) ] <---+
 ```
-Pointer → FF1 → FF2 → Safe Signal
-```
 
-- **FF1** may become metastable when sampling the incoming signal.
-- **FF2** provides an extra clock cycle for the signal to settle to a stable value.
+---
 
-This significantly reduces the probability of metastability affecting the system.
+## Summary of Flag Generation Logic
 
-## 🔁 Gray Code Pointer Synchronization
-The read and write pointers are converted to **Gray code** before crossing clock domains. In Gray code, **only one bit changes at a time**, which reduces the chances of incorrect pointer sampling during synchronization.
-
-## 📂 Project Structure
-
-```
-.
-├── fifo.v      # Asynchronous FIFO design module
-├── tb.sv       # Testbench for simulation
-├── README.md   # Project documentation
-```
-
-## ▶️ Simulation
-The design can be simulated using common **Verilog/SystemVerilog simulation tools**, such as:
-
-- ModelSim
-- Vivado Simulator
-- Icarus Verilog
-
-The testbench verifies correct FIFO behavior including **write, read, full, and empty conditions**.
-
-## 🚀 Applications
-Asynchronous FIFOs are widely used in:
-
-- Clock domain crossing interfaces
-- High-speed communication systems
-- FPGA and ASIC designs
-- Data buffering between modules with different clocks
-
-## 👨‍💻 Author
-Avronil
+* **Empty Flag (`rd_clk` domain):** Asserted when the synchronized write Gray pointer equals the local read Gray pointer:
+  $$\text{empty} = (\text{rd\_gray\_next} == \text{wr\_gray\_sync})$$
+* **Full Flag (`wr_clk` domain):** Asserted when the local write Gray pointer matches the synchronized read Gray pointer, with the top two Most Significant Bits (MSBs) inverted (indicating the write pointer has wrapped around one full cycle ahead of the read pointer):
+  $$\text{full} = (\text{wr\_gray\_next} == \{\sim\text{rd\_gray\_sync}[N:N-1], \text{rd\_gray\_sync}[N-2:0]\})$$
