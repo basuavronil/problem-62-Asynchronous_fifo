@@ -1,5 +1,8 @@
 # Asynchronous FIFO Architecture & Clock Domain Crossing (CDC)
 
+<img width="601" height="380" alt="image" src="https://github.com/user-attachments/assets/a75d107e-801b-44ae-b5c6-8c8ef249db89" />
+
+
 ## Overview
 An **Asynchronous FIFO (First-In, First-Out)** buffer is used to safely transfer data between two independent clock domains (`wr_clk` and `rd_clk`) that have no fixed phase or frequency relationship. Because signals cross between asynchronous clock domains, proper Clock Domain Crossing (CDC) techniques are mandatory to prevent metastability, data corruption, and false flag assertions (`full` / `empty`).
 
